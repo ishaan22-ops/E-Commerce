@@ -3,6 +3,9 @@
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
+from pathlib import Path
+import subprocess
+import sys
 from urllib.parse import parse_qs, urlparse
 
 import cart
@@ -101,7 +104,66 @@ class StoreHandler(BaseHTTPRequestHandler):
         pass
 
 
+def deploy_to_apache():
+    if os.name != "posix" or not Path("/etc/apache2").is_dir():
+        print("Deployment requires an Ubuntu VM with Apache installed.")
+        return 1
+    if os.geteuid() != 0:
+        print("Run this command with sudo: sudo python3 home.py --deploy")
+        return 1
+
+    project_dir = Path(__file__).resolve().parent
+    service_user = os.environ.get("SUDO_USER") or project_dir.parent.name
+    if service_user == "root":
+        print("Run sudo python3 home.py --deploy from /home/azureuser/E-Commerce.")
+        return 1
+
+    app_path = str(project_dir / "home.py").replace("\\", "\\\\").replace('"', '\\"')
+    working_path = str(project_dir).replace("\\", "\\\\").replace('"', '\\"')
+    service = f"""[Unit]
+Description=E-Commerce storefront
+After=network.target
+
+[Service]
+User={service_user}
+WorkingDirectory="{working_path}"
+Environment=HOST=127.0.0.1
+Environment=PORT=8000
+ExecStart=/usr/bin/python3 -B "{app_path}"
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+"""
+    proxy = """ProxyPreserveHost On
+ProxyPass / http://127.0.0.1:8000/
+ProxyPassReverse / http://127.0.0.1:8000/
+"""
+
+    try:
+        subprocess.run(["a2enmod", "proxy", "proxy_http"], check=True)
+        Path("/etc/apache2/conf-available/e-commerce.conf").write_text(proxy, encoding="utf-8")
+        subprocess.run(["a2enconf", "e-commerce"], check=True)
+        Path("/etc/systemd/system/e-commerce.service").write_text(service, encoding="utf-8")
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["apache2ctl", "configtest"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", "e-commerce"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", "apache2"], check=True)
+        subprocess.run(["systemctl", "reload", "apache2"], check=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"Deployment failed: {error}")
+        return 1
+
+    print("Deployment complete. Open http://<VM_PUBLIC_IP>/ (Azure inbound TCP port 80 must be allowed).")
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--deploy"]:
+        raise SystemExit(deploy_to_apache())
+    if sys.argv[1:]:
+        print("Usage: python3 home.py [--deploy]")
+        raise SystemExit(2)
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), StoreHandler)
