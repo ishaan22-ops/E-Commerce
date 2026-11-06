@@ -128,7 +128,7 @@ After=network.target
 
 [Service]
 User={service_user}
-WorkingDirectory="{working_path}"
+WorkingDirectory={working_path}
 Environment=HOST=127.0.0.1
 Environment=PORT=8000
 ExecStart=/usr/bin/python3 -B "{app_path}"
@@ -149,7 +149,9 @@ ProxyPassReverse / http://127.0.0.1:8000/
         Path("/etc/systemd/system/e-commerce.service").write_text(service, encoding="utf-8")
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["apache2ctl", "configtest"], check=True)
-        subprocess.run(["systemctl", "enable", "--now", "e-commerce"], check=True)
+        subprocess.run(["systemctl", "enable", "e-commerce"], check=True)
+        subprocess.run(["systemctl", "start", "e-commerce"], check=True)
+        subprocess.run(["systemctl", "is-active", "--quiet", "e-commerce"], check=True)
         subprocess.run(["systemctl", "enable", "--now", "apache2"], check=True)
         subprocess.run(["systemctl", "reload", "apache2"], check=True)
     except (OSError, subprocess.CalledProcessError) as error:
