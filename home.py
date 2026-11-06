@@ -102,10 +102,10 @@ class StoreHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    host = "127.0.0.1"
+    host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), StoreHandler)
-    print(f"Good Things is running at http://{host}:{port}")
+    print(f"Listening on {host}:{port}; browse to http://<VM_PUBLIC_IP>:{port} from outside the VM.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
