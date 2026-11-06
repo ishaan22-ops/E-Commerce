@@ -4,6 +4,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlparse
@@ -104,9 +105,9 @@ class StoreHandler(BaseHTTPRequestHandler):
         pass
 
 
-def deploy_to_apache():
-    if os.name != "posix" or not Path("/etc/apache2").is_dir():
-        print("Deployment requires an Ubuntu VM with Apache installed.")
+def deploy_to_nginx():
+    if os.name != "posix" or not Path("/etc/os-release").is_file():
+        print("Deployment requires an Ubuntu VM.")
         return 1
     if os.geteuid() != 0:
         print("Run this command with sudo: sudo python3 home.py --deploy")
@@ -137,23 +138,52 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 """
-    proxy = """ProxyPreserveHost On
-ProxyPass / http://127.0.0.1:8000/
-ProxyPassReverse / http://127.0.0.1:8000/
+    nginx_site = """server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 """
 
     try:
-        subprocess.run(["a2enmod", "proxy", "proxy_http"], check=True)
-        Path("/etc/apache2/conf-available/e-commerce.conf").write_text(proxy, encoding="utf-8")
-        subprocess.run(["a2enconf", "e-commerce"], check=True)
+        if shutil.which("nginx") is None:
+            subprocess.run(["apt-get", "update"], check=True)
+            subprocess.run(["apt-get", "install", "-y", "nginx"], check=True)
+
+        available_sites = Path("/etc/nginx/sites-available")
+        enabled_sites = Path("/etc/nginx/sites-enabled")
+        available_sites.mkdir(parents=True, exist_ok=True)
+        enabled_sites.mkdir(parents=True, exist_ok=True)
+        site_path = available_sites / "e-commerce"
+        enabled_path = enabled_sites / "e-commerce"
+        site_path.write_text(nginx_site, encoding="utf-8")
+        if enabled_path.is_symlink() or enabled_path.is_file():
+            enabled_path.unlink()
+        enabled_path.symlink_to(site_path)
+
+        default_site = enabled_sites / "default"
+        if default_site.is_symlink():
+            default_site.unlink()
+
         Path("/etc/systemd/system/e-commerce.service").write_text(service, encoding="utf-8")
         subprocess.run(["systemctl", "daemon-reload"], check=True)
-        subprocess.run(["apache2ctl", "configtest"], check=True)
+        subprocess.run(["nginx", "-t"], check=True)
         subprocess.run(["systemctl", "enable", "e-commerce"], check=True)
         subprocess.run(["systemctl", "start", "e-commerce"], check=True)
         subprocess.run(["systemctl", "is-active", "--quiet", "e-commerce"], check=True)
-        subprocess.run(["systemctl", "enable", "--now", "apache2"], check=True)
-        subprocess.run(["systemctl", "reload", "apache2"], check=True)
+        if shutil.which("apache2ctl"):
+            subprocess.run(["systemctl", "disable", "--now", "apache2"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", "nginx"], check=True)
+        subprocess.run(["systemctl", "reload", "nginx"], check=True)
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"Deployment failed: {error}")
         return 1
@@ -164,7 +194,7 @@ ProxyPassReverse / http://127.0.0.1:8000/
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--deploy"]:
-        raise SystemExit(deploy_to_apache())
+        raise SystemExit(deploy_to_nginx())
     if sys.argv[1:]:
         print("Usage: python3 home.py [--deploy]")
         raise SystemExit(2)
