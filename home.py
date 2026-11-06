@@ -113,9 +113,11 @@ def deploy_to_apache():
         return 1
 
     project_dir = Path(__file__).resolve().parent
-    service_user = os.environ.get("SUDO_USER") or project_dir.parent.name
+    service_user = os.environ.get("SUDO_USER")
+    if not service_user or service_user == "root":
+        service_user = project_dir.parent.name
     if service_user == "root":
-        print("Run sudo python3 home.py --deploy from /home/azureuser/E-Commerce.")
+        print("Run deployment from a non-root user's project directory.")
         return 1
 
     app_path = str(project_dir / "home.py").replace("\\", "\\\\").replace('"', '\\"')
